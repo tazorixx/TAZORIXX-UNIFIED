@@ -1,0 +1,23 @@
+# Gateway / backend origin. Protect sensitive Gateway routes with another password.
+{$GATEWAY_DOMAIN} {
+    encode gzip zstd
+
+    @studio path /api/studio/*
+    handle @studio {
+        reverse_proxy app:8000
+    }
+
+    handle {
+        basic_auth {
+            {$GATEWAY_BASIC_USER} {$GATEWAY_BASIC_HASH}
+        }
+        reverse_proxy app:3030
+    }
+}
+
+# Only activate the web service for the fully self-hosted option:
+# docker compose --profile selfhost-web up -d
+{$STUDIO_DOMAIN} {
+    encode gzip zstd
+    reverse_proxy web:3000
+}

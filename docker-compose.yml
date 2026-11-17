@@ -1,0 +1,91 @@
+# One persistent host (Oracle Always Free VM where available, or paid VPS).
+# Start only one 'app' instance: the bot's SQLite queue has exactly one owner.
+name: tazorixx-unified
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-wa_gateway}
+      MYSQL_USER: ${MYSQL_USER:-wa_gateway_app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 25
+    networks: [private]
+
+  app:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      PORT: "3030"
+      HOSTNAME: "0.0.0.0"
+      BASE_URL: "https://${GATEWAY_DOMAIN:?Set GATEWAY_DOMAIN}"
+      NEXTAUTH_URL: "https://${GATEWAY_DOMAIN}"
+      AUTH_TRUST_HOST: "true"
+      DATABASE_URL: "mysql://${MYSQL_USER:-wa_gateway_app}:${MYSQL_PASSWORD}@db:3306/${MYSQL_DATABASE:-wa_gateway}"
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY; do not rotate after pairing}
+      ENABLE_TELEMETRY: "false"
+      BAILEYS_LOG_LEVEL: warn
+      TZ: Asia/Kolkata
+      HOME: /data
+      STUDIO_SESSION_SECRET: ${STUDIO_SESSION_SECRET:?Set session secret}
+      STUDIO_ADMIN_PASSWORD: ${STUDIO_ADMIN_PASSWORD:?Set admin password}
+      GATEWAY_INTERNAL_URL: "http://localhost:3030"
+      GATEWAY_API_KEY: ${GATEWAY_API_KEY:-}
+      GATEWAY_SESSION_ID: ${GATEWAY_SESSION_ID:-}
+      ENABLE_SENDING: ${ENABLE_SENDING:-false}
+    volumes:
+      - ./data:/data
+      - ./gateway-uploads:/opt/tazorixx/gateway/public/uploads
+    expose: ["3030", "8000"]
+    networks: [private]
+
+  web:
+    profiles: ["selfhost-web"]
+    build:
+      context: ./apps/web
+      args:
+        STUDIO_ORIGIN: "https://${GATEWAY_DOMAIN}"
+        NEXT_PUBLIC_GATEWAY_URL: "https://${GATEWAY_DOMAIN}"
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    expose: ["3000"]
+    networks: [private]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      GATEWAY_DOMAIN: ${GATEWAY_DOMAIN:?Set domain}
+      STUDIO_DOMAIN: ${STUDIO_DOMAIN:?Set self-hosted studio domain}
+      GATEWAY_BASIC_USER: ${GATEWAY_BASIC_USER:-admin}
+      GATEWAY_BASIC_HASH: ${GATEWAY_BASIC_HASH:?Set Caddy password hash}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [private]
+
+networks:
+  private:
+volumes:
+  mysql_data:
+  caddy_data:
+  caddy_config:
